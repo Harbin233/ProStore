@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+prostore-bot-credentials.json
+prostore-bot-credentials.json
+.env
