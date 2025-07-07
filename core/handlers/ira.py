@@ -16,13 +16,14 @@ IRA_ID = 7925207619
 class MethodologistFSM(StatesGroup):
     choosing_type = State()
     avatar = State()
-    description = State()
-    greeting = State()
-    greeting_photo = State()
+    description = State()              # Channel description
     post_text = State()
     button_text = State()
     button_link = State()
     post_image = State()
+    bot_description = State()          # Bot description for combined flow
+    greeting = State()
+    greeting_photo = State()
     ads_recommendation = State()
     ads_target = State()
     ads_creatives_number = State()
@@ -40,18 +41,25 @@ async def start_packaging(callback: CallbackQuery, state: FSMContext):
     await state.update_data(client_id=client_id)
     update_client_stage(client_id, "Упаковка")
 
+    # Выбор типа ресурса: канал, бот или оба
     await callback.message.answer(
         f"Упаковка клиента: {client_name}\nВыбери тип ресурса:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Канал", callback_data="ira_channel")],
-            [InlineKeyboardButton(text="Бот", callback_data="ira_bot")]
+            [InlineKeyboardButton(text="Бот", callback_data="ira_bot")],
+            [InlineKeyboardButton(text="Канал+Бот", callback_data="ira_channel_bot")]
         ])
     )
     await state.set_state(MethodologistFSM.choosing_type)
 
 @router.callback_query(MethodologistFSM.choosing_type)
 async def resource_type_selected(callback: CallbackQuery, state: FSMContext):
-    choice = "Канал" if callback.data == "ira_channel" else "Бот"
+    if callback.data == "ira_channel":
+        choice = "Канал"
+    elif callback.data == "ira_bot":
+        choice = "Бот"
+    else:
+        choice = "Канал+Бот"
     await state.update_data(resource_type=choice)
     await callback.message.answer("Загрузи аватар ресурса.")
     await state.set_state(MethodologistFSM.avatar)
@@ -60,8 +68,9 @@ async def resource_type_selected(callback: CallbackQuery, state: FSMContext):
 async def get_avatar(message: Message, state: FSMContext):
     await state.update_data(avatar=message.photo[-1].file_id if message.photo else "Нет фото")
     data = await state.get_data()
-    if data.get("resource_type") == "Канал":
-        await message.answer("Введи описание ресурса (до 255 символов).")
+    resource = data.get("resource_type")
+    if resource in ["Канал", "Канал+Бот"]:
+        await message.answer("Введи описание канала (до 255 символов).")
     else:
         await message.answer("Введи описание бота (до 120 символов).")
     await state.set_state(MethodologistFSM.description)
@@ -70,43 +79,26 @@ async def get_avatar(message: Message, state: FSMContext):
 async def get_description(message: Message, state: FSMContext):
     data = await state.get_data()
     resource = data.get("resource_type")
+    # Limit description length based on resource
     limit = 255 if resource == "Канал" else 120
     if len(message.text) > limit:
         await message.answer(f"❗️ Превышено ограничение: {len(message.text)} из {limit} символов")
         return
-    await state.update_data(description=message.text)
-    if resource == "Канал":
+    # Save appropriate description field
+    if resource == "Канал+Бот":
+        # First description is for channel
+        await state.update_data(description=message.text)
+    else:
+        # Single resource description
+        await state.update_data(description=message.text)
+
+    # Proceed to next step for channel or bot
+    if resource in ["Канал", "Канал+Бот"]:
         await message.answer("Введи текст поста-закрепа (до 1024 символов).")
         await state.set_state(MethodologistFSM.post_text)
     else:
         await message.answer("Введи приветственное сообщение (до 512 символов).")
         await state.set_state(MethodologistFSM.greeting)
-
-@router.message(MethodologistFSM.greeting)
-async def get_greeting(message: Message, state: FSMContext):
-    if len(message.text) > 512:
-        await message.answer(f"❗️ Превышено ограничение: {len(message.text)} из 512 символов")
-        return
-    await state.update_data(greeting=message.text)
-    await message.answer("Прикрепи фото для приветствия или напиши 'Пропустить'.")
-    await state.set_state(MethodologistFSM.greeting_photo)
-
-@router.message(MethodologistFSM.greeting_photo)
-async def get_greeting_photo(message: Message, state: FSMContext):
-    image_id = message.photo[-1].file_id if message.photo else "Без фото"
-    await state.update_data(greeting_photo=image_id)
-    data = await state.get_data()
-    if data.get("resource_type") == "Канал":
-        await message.answer("Введи текст после кнопки старт (до 1024 символов).")
-        await state.set_state(MethodologistFSM.post_text)
-    else:
-        await message.answer("Есть ли услуга ADS у клиента:",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Есть", callback_data="ads_yes")],
-                [InlineKeyboardButton(text="❌ Нет", callback_data="ads_no")]
-            ])
-        )
-        await state.set_state(MethodologistFSM.ads_recommendation)
 
 @router.message(MethodologistFSM.post_text)
 async def get_post(message: Message, state: FSMContext):
@@ -133,13 +125,70 @@ async def get_button_link(message: Message, state: FSMContext):
 async def get_image(message: Message, state: FSMContext):
     image_id = message.photo[-1].file_id if message.photo else "Без фото"
     await state.update_data(post_image=image_id)
-    await message.answer("Есть ли услуга ADS у клиента:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Есть", callback_data="ads_yes")],
-            [InlineKeyboardButton(text="❌ Нет", callback_data="ads_no")]
-        ])
-    )
-    await state.set_state(MethodologistFSM.ads_recommendation)
+    data = await state.get_data()
+    if data.get("resource_type") == "Канал+Бот":
+        # After channel flow, ask for bot description
+        await message.answer("Введи описание бота (до 120 символов).")
+        await state.set_state(MethodologistFSM.bot_description)
+    else:
+        # Proceed to ADS or greeting for single resource
+        if data.get("resource_type") == "Канал":
+            await message.answer(
+                "Есть ли услуга ADS у клиента:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Есть", callback_data="ads_yes")],
+                    [InlineKeyboardButton(text="❌ Нет", callback_data="ads_no")]
+                ])
+            )
+            await state.set_state(MethodologistFSM.ads_recommendation)
+        else:
+            await message.answer("Введи приветственное сообщение (до 512 символов).")
+            await state.set_state(MethodologistFSM.greeting)
+
+@router.message(MethodologistFSM.bot_description)
+async def get_bot_description(message: Message, state: FSMContext):
+    if len(message.text) > 120:
+        await message.answer(f"❗️ Превышено ограничение: {len(message.text)} из 120 символов")
+        return
+    await state.update_data(bot_description=message.text)
+    # Now start bot flow
+    await message.answer("Введи приветственное сообщение (до 512 символов).")
+    await state.set_state(MethodologistFSM.greeting)
+
+@router.message(MethodologistFSM.greeting)
+async def get_greeting(message: Message, state: FSMContext):
+    if len(message.text) > 512:
+        await message.answer(f"❗️ Превышено ограничение: {len(message.text)} из 512 символов")
+        return
+    await state.update_data(greeting=message.text)
+    await message.answer("Прикрепи фото для приветствия или напиши 'Пропустить'.")
+    await state.set_state(MethodologistFSM.greeting_photo)
+
+@router.message(MethodologistFSM.greeting_photo)
+async def get_greeting_photo(message: Message, state: FSMContext):
+    image_id = message.photo[-1].file_id if message.photo else "Без фото"
+    await state.update_data(greeting_photo=image_id)
+    data = await state.get_data()
+    # Decide next step based on resource or combined
+    if data.get("resource_type") in ["Канал", "Канал+Бот"]:
+        await message.answer(
+            "Есть ли услуга ADS у клиента:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Есть", callback_data="ads_yes")],
+                [InlineKeyboardButton(text="❌ Нет", callback_data="ads_no")]
+            ])
+        )
+        await state.set_state(MethodologistFSM.ads_recommendation)
+    else:
+        # Bot only without post flows
+        await message.answer(
+            "Есть ли услуга ADS у клиента:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Есть", callback_data="ads_yes")],
+                [InlineKeyboardButton(text="❌ Нет", callback_data="ads_no")]
+            ])
+        )
+        await state.set_state(MethodologistFSM.ads_recommendation)
 
 @router.callback_query(MethodologistFSM.ads_recommendation)
 async def ask_ads(callback: CallbackQuery, state: FSMContext):
@@ -147,7 +196,8 @@ async def ask_ads(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("Опиши, что нужно сделать с ресурсом для успешной модерации.")
         await state.set_state(MethodologistFSM.ads_recommendation)
     else:
-        await callback.message.answer("Нажми, чтобы передать карточку техспециалисту:",
+        await callback.message.answer(
+            "Нажми, чтобы передать карточку техспециалисту:",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="📤 Передать карточку", callback_data="send_card")]
             ])
@@ -189,14 +239,11 @@ async def get_creative_text(message: Message, state: FSMContext):
     creatives = data.get("creatives", [])
     index = data.get("creative_index", 1)
     total = data.get("creative_total", 0)
-
     if len(message.text) > 160:
         await message.answer(f"❗ Превышено ограничение: {len(message.text)} из 160 символов")
         return
-
     creatives.append(message.text)
     await state.update_data(creatives=creatives)
-
     if index >= total:
         await message.answer("Теперь напиши ТЗ и текст для баннера, если нужен, или напиши 'Пропустить'.")
         await state.set_state(MethodologistFSM.ads_banner_task)
@@ -218,22 +265,54 @@ async def get_ads_banner(message: Message, state: FSMContext):
 async def confirm_card(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await callback.message.answer("✅ Карточка отправлена техспециалисту.")
-
     client_id = data.get("client_id")
     if client_id:
-        update_client_stage(client_id, "Упаковка завершена")
-        await save_packaging_data(client_id, data)
-
+        resource = data.get("resource_type")
+        # Разделяем упаковки для канала и бота
+        if resource == "Канал+Бот":
+            # Данные для канала
+            channel_data = {
+                "avatar": data.get("avatar"),
+                "description": data.get("description"),
+                "post": data.get("post"),
+                "button_text": data.get("button_text"),
+                "button_link": data.get("button_link"),
+                "post_image": data.get("post_image"),
+                "resource_type": "Канал"
+            }
+            update_client_stage(client_id, "Упаковка канала завершена")
+            await save_packaging_data(client_id, channel_data)
+            # Данные для бота
+            bot_data = {
+                "avatar": data.get("avatar"),
+                "description": data.get("bot_description"),
+                "greeting": data.get("greeting"),
+                "greeting_photo": data.get("greeting_photo"),
+                "ads_recommendation": data.get("ads_recommendation"),
+                "ads_target": data.get("ads_target"),
+                "creatives": data.get("creatives"),
+                "banner_task": data.get("banner_task"),
+                "resource_type": "Бот"
+            }
+            update_client_stage(client_id, "Упаковка бота завершена")
+            await save_packaging_data(client_id, bot_data)
+        else:
+            # Одна упаковка
+            update_client_stage(client_id, "Упаковка завершена")
+            # Для однотипного ресурса описание уже в data['description']
+            package_data = {
+                **data,
+                "resource_type": resource
+            }
+            await save_packaging_data(client_id, package_data)
+        # Уведомляем техспециалиста
         markup = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="🔧 Приступить к тех.этапу", callback_data=f"andrey_start:{client_id}")]]
         )
-        await push_message(ANDREY_ID, "📦 Готовая упаковка. Начни техэтап.", markup)
-
-    bot: Bot = callback.bot
-    await bot.send_message(ANDREY_ID, "📤 Карточка готова. Проверь и подтверди, если всё верно.")
+        await push_message(ANDREY_ID, "📦 Есть упаковка для тех.этапа", markup)
+        await callback.bot.send_message(ANDREY_ID, "📤 Проверь и подтверди упаковку, если всё верно.")
     await state.clear()
 
-# ✅ Эта функция была недостающей — теперь добавлена корректно:
 async def notify_ira_start_pack(client_id: str, client_name: str):
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Начать упаковку", callback_data=f"ira_start:{client_id}:{client_name}")]
