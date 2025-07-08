@@ -58,10 +58,11 @@ async def payment_received(callback: CallbackQuery, state: FSMContext):
     update_client_stage(client_id, "Оплачено")
 
     # Уведомления
-    await push_message(IRA_ID, "✅ Клиент оплатил, можно приступать к работе")
+
+    await push_message(IRA_ID, "✅ Клиент оплатил, можно приступать к работе", None)
     notify_text = "💸 Счёт оплачен"
     for uid in [ALEXANDR_ID, ANDREY_ID, EGOR_ID]:
-        await push_message(uid, notify_text)
+        await push_message(uid, notify_text, None)
 
     # Ире — пуш с кнопкой "Начать упаковку"
     client_name = get_client_name(client_id)

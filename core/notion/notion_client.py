@@ -65,6 +65,7 @@ def add_service_entry(service_name: str, price: int, client_page_id: str) -> Non
     """
     Добавляет запись об услуге для клиента в базе Services через relation на Clients.
     """
+    print(client_page_id)
     notion.pages.create(
         parent={"database_id": SERVICES_DB_ID},
         properties={
@@ -122,7 +123,7 @@ async def save_packaging_data(client_id: str, data: dict) -> None:
         return [{"text": {"content": text}}] if text and text != "—" else []
 
     props = {
-        "Client ID":            {"rich_text": [{"text": {"content": client_id}}]},
+        "Упаковка ID":          {"title": [{"text": {"content": "тест"}}]},
         "Тип ресурса":          {"select": {"name": data.get("resource_type", "—")} },
         "Аватар":               {"rich_text": as_rich(data.get("avatar", "—"))},
         "Описание":             {"rich_text": as_rich(data.get("description", "—"))},
@@ -135,11 +136,12 @@ async def save_packaging_data(client_id: str, data: dict) -> None:
         "ADS: ТЗ":              {"rich_text": as_rich(data.get("ads_recommendation", "—"))},
         "ADS: ЦА":              {"rich_text": as_rich(data.get("ads_target", "—"))},
         "ADS: Баннер":          {"rich_text": as_rich(data.get("banner_task", "—"))},
-        "Креативы":             {"multi_select": [{"name": c} for c in data.get("creatives", [])]} if data.get("creatives") else [],
-        "Передано техспецу?":   {"checkbox": {}}
+        "Креативы":             {"multi_select": [{"name": c} for c in data.get("creatives", [])] if data.get("creatives") else []},
+        "Передано техспецу?":   {"checkbox": False},
+        "Клиент":               {"relation": [{"id": client_id}]}
     }
 
-    await notion.pages.create(
+    notion.pages.create(
         parent={"database_id": PACKAGING_DB_ID},
         properties=props
     )
@@ -149,8 +151,8 @@ def get_packaging_data(client_id: str) -> dict:
     results = notion.databases.query(
         database_id=PACKAGING_DB_ID,
         filter={
-            "property": "Client ID",
-            "rich_text": {"contains": client_id}
+            "property": "Клиент",
+            "relation": {"contains": client_id}
         }
     ).get("results", [])
     if not results:

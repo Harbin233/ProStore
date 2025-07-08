@@ -1,12 +1,12 @@
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from core.utils.push import push_message
-from core.notion.notion_client import is_packaging_done, update_client_stage, save_packaging_data
+from core.notion.notion_client import is_packaging_done, update_client_stage, save_packaging_data, get_client_name
 
 router = Router()
 
@@ -33,13 +33,14 @@ class MethodologistFSM(StatesGroup):
 
 @router.callback_query(F.data.startswith("ira_start:"))
 async def start_packaging(callback: CallbackQuery, state: FSMContext):
-    _, client_id, client_name = callback.data.split(":")
+    _, client_id = callback.data.split(":")
     if is_packaging_done(client_id):
         await callback.message.answer("❗️ Клиент уже упакован. Проверь карточку в Notion.")
         return
 
     await state.update_data(client_id=client_id)
     update_client_stage(client_id, "Упаковка")
+    client_name = get_client_name(client_id)
 
     # Выбор типа ресурса: канал, бот или оба
     await callback.message.answer(
@@ -61,7 +62,7 @@ async def resource_type_selected(callback: CallbackQuery, state: FSMContext):
     else:
         choice = "Канал+Бот"
     await state.update_data(resource_type=choice)
-    await callback.message.answer("Загрузи аватар ресурса.")
+    await callback.message.answer("Загрузи аватар ресурса.", reply_markup=ReplyKeyboardRemove(remove_keyboard=True))
     await state.set_state(MethodologistFSM.avatar)
 
 @router.message(MethodologistFSM.avatar)
@@ -315,6 +316,6 @@ async def confirm_card(callback: CallbackQuery, state: FSMContext):
 
 async def notify_ira_start_pack(client_id: str, client_name: str):
     markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Начать упаковку", callback_data=f"ira_start:{client_id}:{client_name}")]
+        [InlineKeyboardButton(text="Начать упаковку", callback_data=f"ira_start:{client_id}")]
     ])
     await push_message(IRA_ID, f"✅ Клиент готов к упаковке: {client_name}", markup)
