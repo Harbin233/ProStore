@@ -57,14 +57,20 @@ def log_action(page_id: str, person: str, stage: str, comment: str = "") -> None
     )
 
 def get_all_clients() -> list[dict]:
+    """
+    Возвращает список клиентов с безопасным извлечением имени.
+    """
     results = notion.databases.query(database_id=DATABASE_ID).get("results", [])
-    return [
-        {
-            "id": page["id"],
-            "name": page["properties"]["Имя"]["title"][0]["plain_text"]
-        }
-        for page in results
-    ]
+    safe_clients = []
+    for page in results:
+        props = page.get("properties", {})
+        name_prop = props.get("Имя", {}).get("title", [])
+        name = name_prop[0]["plain_text"] if name_prop and "plain_text" in name_prop[0] else "(Без имени)"
+        safe_clients.append({
+            "id": page.get("id", ""),
+            "name": name
+        })
+    return safe_clients
 
 # =================== Услуги клиента ==========================
 
@@ -90,20 +96,19 @@ def get_services_for_client(client_page_id: str) -> list[dict]:
     ).get("results", [])
     services = []
     for res in results:
-        title = res["properties"]["Название услуги"]["title"]
-        name = title[0]["plain_text"] if title else ""
-        price = res["properties"]["Цена"]["number"]
+        props = res.get("properties", {})
+        title = props.get("Название услуги", {}).get("title", [])
+        name = title[0]["plain_text"] if title and "plain_text" in title[0] else ""
+        price = props.get("Цена", {}).get("number", 0)
         services.append({"name": name, "price": price})
     return services
 
 def get_client_services(client_id: str) -> list[str]:
-    """ Возвращает список названий услуг (строк) для клиента по его client_id. """
     return [service["name"] for service in get_services_for_client(client_id)]
 
 # ================== Этапы и упаковка =========================
 
 def update_client_stage(client_page_id: str, stage: str, retries: int = 3, delay: float = 1.0) -> None:
-    # retry с задержкой для защиты от 409
     retry_notion_update(
         notion.pages.update,
         page_id=client_page_id,
@@ -113,16 +118,26 @@ def update_client_stage(client_page_id: str, stage: str, retries: int = 3, delay
     )
 
 def get_client_stage(client_page_id: str) -> str:
+    """
+    Безопасно извлекает статус 'Этап' из страницы клиента.
+    """
     page = notion.pages.retrieve(client_page_id)
-    return page["properties"].get("Этап", {}).get("select", {}).get("name", "")
+    props = page.get("properties", {})
+    stage_prop = props.get("Этап")
+    if not stage_prop:
+        return ""
+    select_val = stage_prop.get("select")
+    if not select_val:
+        return ""
+    return select_val.get("name", "")
 
 def is_packaging_done(client_page_id: str) -> bool:
     return get_client_stage(client_page_id) == "Упаковка завершена"
 
 def get_client_name(client_page_id: str) -> str:
     page = notion.pages.retrieve(client_page_id)
-    title = page["properties"].get("Имя", {}).get("title", [])
-    return title[0]["plain_text"] if title else ""
+    title = page.get("properties", {}).get("Имя", {}).get("title", [])
+    return title[0]["plain_text"] if title and "plain_text" in title[0] else ""
 
 async def save_packaging_data(client_id: str, data: dict) -> None:
     def as_rich(text: str):
@@ -145,7 +160,6 @@ async def save_packaging_data(client_id: str, data: dict) -> None:
         "Передано техспецу?":   {"checkbox": False},
         "Клиент":               {"relation": [{"id": client_id}]}
     }
-    # retry Notion (409)
     retry_notion_update(
         notion.pages.create,
         parent={"database_id": PACKAGING_DB_ID},
@@ -154,7 +168,7 @@ async def save_packaging_data(client_id: str, data: dict) -> None:
 
 def get_packaging_data(client_id: str) -> dict:
     """
-    Получить первую упаковку для клиента (как было для совместимости с остальным кодом).
+    Получить первую упаковку для клиента (для совместимости).
     """
     results = notion.databases.query(
         database_id=PACKAGING_DB_ID,
@@ -166,14 +180,17 @@ def get_packaging_data(client_id: str) -> dict:
     if not results:
         return {}
 
-    props = results[0]["properties"]
+    props = results[0].get("properties", {})
 
     def extract_text(key: str) -> str:
         rich = props.get(key, {}).get("rich_text", [])
-        return rich[0]["plain_text"] if rich else ""
+        return rich[0]["plain_text"] if rich and "plain_text" in rich[0] else ""
 
     def extract_select(key: str) -> str:
-        return props.get(key, {}).get("select", {}).get("name", "")
+        select = props.get(key, {}).get("select")
+        if not select:
+            return ""
+        return select.get("name", "")
 
     def extract_multi(key: str) -> list[str]:
         return [item["name"] for item in props.get(key, {}).get("multi_select", [])]
@@ -196,8 +213,7 @@ def get_packaging_data(client_id: str) -> dict:
 
 def get_packagings_for_client(client_id: str) -> list[dict]:
     """
-    Возвращает список всех упаковок (строк из базы 'Упаковки') по клиенту.
-    Каждая упаковка — это словарь с данными по конкретному типу ресурса.
+    Возвращает список всех упаковок по клиенту. Все извлечения защищены!
     """
     results = notion.databases.query(
         database_id=PACKAGING_DB_ID,
@@ -208,21 +224,24 @@ def get_packagings_for_client(client_id: str) -> list[dict]:
     ).get("results", [])
     packs = []
     for res in results:
-        props = res["properties"]
+        props = res.get("properties", {})
 
         def extract_text(key: str) -> str:
             rich = props.get(key, {}).get("rich_text", [])
-            return rich[0]["plain_text"] if rich else ""
+            return rich[0]["plain_text"] if rich and "plain_text" in rich[0] else ""
 
         def extract_select(key: str) -> str:
-            return props.get(key, {}).get("select", {}).get("name", "")
+            select = props.get(key, {}).get("select")
+            if not select:
+                return ""
+            return select.get("name", "")
 
         def extract_multi(key: str) -> list[str]:
             return [item["name"] for item in props.get(key, {}).get("multi_select", [])]
 
         packs.append({
             "resource_type":      extract_select("Тип ресурса"),
-            "stage":              extract_select("Этап"),  # <--- ВАЖНО! теперь будет доступен статус упаковки
+            "stage":              extract_select("Этап"),
             "avatar":             extract_text("Аватар"),
             "description":        extract_text("Описание"),
             "greeting":           extract_text("Приветствие"),
@@ -238,11 +257,9 @@ def get_packagings_for_client(client_id: str) -> list[dict]:
         })
     return packs
 
-# ———— НОВОЕ: упаковки по статусу ————
 def get_packagings_by_stage(client_id: str, stage: str = None) -> list[dict]:
     """
-    Возвращает список упаковок (PACKAGING_DB_ID) для клиента.
-    Если указан stage — только для нужного этапа (например, "На доработке").
+    Возвращает список упаковок для клиента, опционально только по stage (этапу).
     """
     filter_ = {
         "and": [
@@ -260,20 +277,23 @@ def get_packagings_by_stage(client_id: str, stage: str = None) -> list[dict]:
     ).get("results", [])
     packs = []
     for res in results:
-        props = res["properties"]
+        props = res.get("properties", {})
 
         def extract_text(key: str) -> str:
             rich = props.get(key, {}).get("rich_text", [])
-            return rich[0]["plain_text"] if rich else ""
+            return rich[0]["plain_text"] if rich and "plain_text" in rich[0] else ""
 
         def extract_select(key: str) -> str:
-            return props.get(key, {}).get("select", {}).get("name", "")
+            select = props.get(key, {}).get("select")
+            if not select:
+                return ""
+            return select.get("name", "")
 
         def extract_multi(key: str) -> list[str]:
             return [item["name"] for item in props.get(key, {}).get("multi_select", [])]
 
         packs.append({
-            "id":                 res["id"],
+            "id":                 res.get("id", ""),
             "resource_type":      extract_select("Тип ресурса"),
             "stage":              extract_select("Этап"),
             "avatar":             extract_text("Аватар"),

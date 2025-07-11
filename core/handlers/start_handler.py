@@ -2,23 +2,18 @@ from aiogram import Router
 from aiogram.types import Message
 from aiogram.filters import CommandStart
 
-from core.keyboards.egor_keyboard import egor_kb
-from core.keyboards.ira_keyboard import ira_kb
-from core.keyboards.anastasiya_keyboard import anastasiya_kb
-from core.keyboards.andrey_keyboard import andrey_kb
-from core.keyboards.alexandr_keyboard import alexandr_kb
-from core.keyboards.irina_keyboard import irina_kb
+from core.keyboards.employee_keyboards import employee_keyboards  # <-- новый импорт!
 
 router = Router()
 
 # Telegram ID сотрудников + их клавиатуры
 ID_MAP = {
-    7585439289: ("Егор", egor_kb),
-    7925207619: ("Ира", ira_kb),
-    7553118544: ("Анастасия", anastasiya_kb),
-    8151289930: ("Андрей", andrey_kb),
-    6503850751: ("Александр", alexandr_kb),
-    7714773957: ("Ирина Горшкова", irina_kb),
+    7585439289: ("Егор", employee_keyboards[7585439289]),
+    7925207619: ("Ира", employee_keyboards[7925207619]),
+    7553118544: ("Анастасия", employee_keyboards[7553118544]),
+    8151289930: ("Андрей", employee_keyboards[8151289930]),
+    6503850751: ("Александр", employee_keyboards[6503850751]),
+    7714773957: ("Ирина Горшкова", employee_keyboards[7714773957]),
 }
 
 @router.message(CommandStart())
