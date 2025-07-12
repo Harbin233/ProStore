@@ -3,6 +3,8 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
+from core.notion.notion_client import update_push_interval_notion
+
 # ID тех, кто может управлять пушами
 PUSH_ADMINS = [8151289930, 6503850751]  # Андрей, Александр
 
@@ -29,14 +31,17 @@ async def push_staff_menu(message: Message, state: FSMContext):
         await message.answer("Нет доступа.")
         return
 
-    # Формируем инлайн-кнопки сотрудников
+    # Формируем инлайн-кнопки сотрудников (только для обычных сотрудников)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=name, callback_data=f"push_choose:{emp_id}")]
             for emp_id, name in EMPLOYEES.items() if emp_id not in PUSH_ADMINS
         ]
     )
-    await message.answer("Выбери сотрудника, для которого хочешь изменить частоту пушей:", reply_markup=keyboard)
+    await message.answer(
+        "Выбери сотрудника, для которого хочешь изменить частоту пушей:",
+        reply_markup=keyboard
+    )
     await state.set_state(PushFSM.choosing_employee)
 
 # 2. Обработка выбора сотрудника
@@ -71,12 +76,14 @@ async def push_set_interval(callback: CallbackQuery, state: FSMContext):
     emp_id = data.get("target_emp")
     interval = int(callback.data.split(":")[1])
 
-    # Здесь вызови функцию, которая обновляет настройки пушей (например, в базе или в памяти)
-    # Пример: update_push_interval(emp_id, interval)
-    # (эту функцию реализуем дальше)
+    # -- Обновляем интервал в Notion:
+    ok = update_push_interval_notion(emp_id, interval)
 
-    await callback.message.edit_text(
-        f"✅ Для сотрудника <b>{EMPLOYEES.get(emp_id, '—')}</b> установлен интервал пушей: <b>{interval} ч.</b>"
-    )
+    if ok:
+        text = f"✅ Для сотрудника <b>{EMPLOYEES.get(emp_id, '—')}</b> установлен интервал пушей: <b>{interval} ч.</b>"
+    else:
+        text = f"❗️ Не удалось обновить интервал в Notion для {EMPLOYEES.get(emp_id, '—')}!"
+
+    await callback.message.edit_text(text)
     await state.clear()
     await callback.answer()
