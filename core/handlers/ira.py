@@ -1,23 +1,19 @@
+import asyncio
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from core.utils.push import push_message
 from core.notion.notion_client import (
     is_packaging_done,
     update_client_stage,
     save_packaging_data,
     get_client_name,
-    get_client_services,   # sync!
+    get_client_services,
 )
 
 router = Router()
 
-ANDREY_ID = 8151289930
-IRA_ID = 7925207619
-
-# ==== Состояния ====
 class IraGlobalFSM(StatesGroup):
     idle = State()
     final_confirm = State()
@@ -43,7 +39,7 @@ class IraAdsFSM(StatesGroup):
     ads_creative_input = State()
     ads_banner_task = State()
 
-# ==== Главная точка входа ====
+# === ВХОД В УПАКОВКУ (без пушей) ===
 @router.callback_query(F.data.startswith("ira_start:"))
 async def start_packaging(callback: CallbackQuery, state: FSMContext):
     _, client_id = callback.data.split(":")
@@ -51,39 +47,48 @@ async def start_packaging(callback: CallbackQuery, state: FSMContext):
         await callback.message.answer("❗️ Клиент уже упакован.")
         return
 
+    await callback.message.answer("⏳ Загружаю данные клиента…")
+    await asyncio.sleep(0.7)
     await state.clear()
     await state.update_data(client_id=client_id)
     update_client_stage(client_id, "Упаковка")
-    client_name = get_client_name(client_id)
 
-    # Получаем список услуг из Notion
-    client_services = get_client_services(client_id)
+    # Три попытки загрузить услуги клиента
+    client_services = None
+    for _ in range(3):
+        try:
+            client_services = get_client_services(client_id)
+            if client_services:
+                break
+        except Exception:
+            await asyncio.sleep(1)
+    if not client_services:
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔁 Повторить попытку", callback_data=f"ira_start:{client_id}")]
+        ])
+        await callback.message.answer("❌ Не удалось получить данные клиента из Notion. Проверь соединение и попробуй ещё раз.", reply_markup=markup)
+        return
+
     queue = []
     if "Вывод в ТОП" in client_services:
         queue += ["Канал", "Бот"]
     if "ADS" in client_services:
         queue.append("ADS")
     queue = list(dict.fromkeys(queue))
-
     if not queue:
         await callback.message.answer("Нет задач для упаковки!")
         return
 
     await state.update_data(pack_queue=queue, pack_index=0)
-    await callback.message.answer(
-        f"Клиент заказал услуги: {', '.join(client_services)}\n\n"
-        f"Начинаем упаковку: {queue[0]}."
-    )
     await start_next_packaging(callback.message, state)
 
-# ==== Функция перехода к следующему этапу ====
+# === СТАРТ КАЖДОГО ЭТАПА ===
 async def start_next_packaging(message: Message, state: FSMContext):
     data = await state.get_data()
     queue = data.get("pack_queue", [])
     index = data.get("pack_index", 0)
 
     if index >= len(queue):
-        # Всё завершено — показать финальную кнопку
         await message.answer(
             "✅ Все этапы упаковки завершены!\n\n"
             "Проверь все введённые данные. Когда всё готово — нажми кнопку ниже, чтобы отправить все карточки техспециалисту.",
@@ -98,25 +103,16 @@ async def start_next_packaging(message: Message, state: FSMContext):
 
     current = queue[index]
     if current == "Канал":
-        await message.answer(
-            "Упаковка КАНАЛА:\n\n"
-            "1️⃣ Сначала загрузи аватар канала (фото). Если нет — напиши 'Пропустить'."
-        )
+        await message.answer("Упаковка КАНАЛА:\n\n1️⃣ Сначала загрузи аватар канала (фото). Если нет — напиши 'Пропустить'.")
         await state.set_state(IraChannelFSM.avatar)
     elif current == "Бот":
-        await message.answer(
-            "Упаковка БОТА:\n\n"
-            "1️⃣ Сначала загрузи аватар бота (фото). Если нет — напиши 'Пропустить'."
-        )
+        await message.answer("Упаковка БОТА:\n\n1️⃣ Сначала загрузи аватар бота (фото). Если нет — напиши 'Пропустить'.")
         await state.set_state(IraBotFSM.avatar)
     elif current == "ADS":
-        await message.answer(
-            "Упаковка ADS:\n\n"
-            "1️⃣ Опиши ТЗ для модерации (например: требования к ресурсу,рекомендации)."
-        )
+        await message.answer("Упаковка ADS:\n\n1️⃣ Опиши ТЗ для модерации (например: требования к ресурсу, рекомендации).")
         await state.set_state(IraAdsFSM.ads_recommendation)
 
-# ==== FSM для Канала ====
+# === КАНАЛ ===
 @router.message(IraChannelFSM.avatar)
 async def channel_avatar(message: Message, state: FSMContext):
     await state.update_data(channel_avatar=message.photo[-1].file_id if message.photo else "Нет фото")
@@ -157,12 +153,11 @@ async def channel_button_link(message: Message, state: FSMContext):
 async def channel_post_image(message: Message, state: FSMContext):
     image_id = message.photo[-1].file_id if message.photo else "Без фото"
     await state.update_data(channel_post_image=image_id)
-    # Всё для канала собрано, двигаемся дальше
     data = await state.get_data()
     await state.update_data(pack_index=data.get("pack_index", 0) + 1)
     await start_next_packaging(message, state)
 
-# ==== FSM для Бота ====
+# === БОТ ===
 @router.message(IraBotFSM.avatar)
 async def bot_avatar(message: Message, state: FSMContext):
     await state.update_data(bot_avatar=message.photo[-1].file_id if message.photo else "Нет фото")
@@ -195,7 +190,7 @@ async def bot_greeting_photo(message: Message, state: FSMContext):
     await state.update_data(pack_index=data.get("pack_index", 0) + 1)
     await start_next_packaging(message, state)
 
-# ==== FSM для ADS ====
+# === ADS ===
 @router.message(IraAdsFSM.ads_recommendation)
 async def ads_recommendation(message: Message, state: FSMContext):
     await state.update_data(ads_recommendation=message.text)
@@ -250,14 +245,13 @@ async def ads_banner_task(message: Message, state: FSMContext):
     await state.update_data(pack_index=data.get("pack_index", 0) + 1)
     await start_next_packaging(message, state)
 
-# ==== Финальная отправка всех карточек ====
+# === ФИНАЛ: Передать все карточки ===
 @router.callback_query(IraGlobalFSM.final_confirm)
 async def send_all_cards(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     client_id = data.get("client_id")
     queue = data.get("pack_queue", [])
 
-    # Отправляем по каждой категории, если она была в очереди
     if "Канал" in queue:
         channel_data = {
             "avatar": data.get("channel_avatar"),
@@ -294,17 +288,5 @@ async def send_all_cards(callback: CallbackQuery, state: FSMContext):
         update_client_stage(client_id, "Упаковка ADS завершена")
 
     await callback.message.answer("✅ Все карточки успешно отправлены техспециалисту!")
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔧 Приступить к тех.этапу", callback_data=f"andrey_start:{client_id}")]
-        ]
-    )
-    await push_message(ANDREY_ID, "📦 Все упаковки для клиента готовы!", markup)
+    # Здесь нет push_message и уведомления!
     await state.clear()
-
-# ==== Уведомление для Иры ====
-async def notify_ira_start_pack(client_id: str, client_name: str):
-    markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Начать упаковку", callback_data=f"ira_start:{client_id}")]
-    ])
-    await push_message(IRA_ID, f"✅ Клиент готов к упаковке: {client_name}", markup)

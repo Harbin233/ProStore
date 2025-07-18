@@ -1,31 +1,25 @@
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.types import Message
-from aiogram.filters import CommandStart
-
-from core.keyboards.employee_keyboards import employee_keyboards  # <-- новый импорт!
+from aiogram.filters import Command
+from core.notion.notion_client import set_telegram_id_for_client_by_username
 
 router = Router()
 
-# Telegram ID сотрудников + их клавиатуры
-ID_MAP = {
-    7585439289: ("Егор", employee_keyboards[7585439289]),
-    7925207619: ("Ира", employee_keyboards[7925207619]),
-    7553118544: ("Анастасия", employee_keyboards[7553118544]),
-    8151289930: ("Андрей", employee_keyboards[8151289930]),
-    6503850751: ("Александр", employee_keyboards[6503850751]),
-    7714773957: ("Ирина Горшкова", employee_keyboards[7714773957]),
-}
+@router.message(Command("start"))
+async def handle_start(message: Message):
+    tg_id = message.from_user.id
+    username = message.from_user.username
+    name = message.from_user.full_name
 
-@router.message(CommandStart())
-async def start_command(message: Message):
-    user_id = message.from_user.id
-    user = ID_MAP.get(user_id)
+    if not username:
+        await message.answer("У вас не установлен username в Telegram. Установите его, чтобы продолжить.")
+        return
 
-    if user:
-        name, keyboard = user
-        await message.answer(
-            f"Привет, {name}! Выбери действие из меню ниже ⬇️",
-            reply_markup=keyboard
-        )
+    # Вписываем Telegram ID по username, если такой клиент уже есть
+    updated = set_telegram_id_for_client_by_username("@" + username, tg_id)
+    if updated:
+        await message.answer("✅ Ваш Telegram ID привязан к карточке клиента. Спасибо!")
     else:
-        await message.answer("Здравствуйте! Вы не администратор.")
+        await message.answer(
+            "❗️Вы не зарегистрированы как клиент, обратитесь к менеджеру."
+        )
